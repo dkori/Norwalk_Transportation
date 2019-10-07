@@ -1,0 +1,341 @@
+---
+title: "Norwalk background"
+author: "Devraj Kori"
+date: "9/6/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+knitr::opts_chunk$set(echo = TRUE)
+library(rmarkdown)
+library(knitr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+require(readxl)
+require(openxlsx)
+require(reshape2)
+require(scales)
+require(gridExtra)
+library(tidycensus)
+#for QWI
+library(httr)
+library(jsonlite)
+library(readr)
+
+```
+
+```{r options, echo=FALSE}
+
+state_var<-"CT"
+#if only looking at selection of variables for certain categories, change to false
+#enter in the state fips code (for QWI), state FIPS codes can be found here: 
+state_fips<-"09"
+all_counties<-TRUE
+##if you set all_counties to FALSE, enter the list of counties in question here
+select_counties<-""
+```
+
+
+```{r create_workbook_of_tables, echo=FALSE}
+#create a workbook object to store the underlying data
+#workbook will be written to excel file later
+for_export=createWorkbook()
+
+#create separate export workbook for housing stock
+for_export_stock=createWorkbook()
+```
+
+```{r palette_function, echo=FALSE}
+#create M_L color palette
+#define rgb_max function that just passes 255 to the rgb function as the max value
+rgb_max<-function(red,blue,green){
+  rgb(red,blue,green,maxColorValue=255)
+}
+#store the M&L colors as a palette
+M_L_palette<-c(rgb_max(35,94,168), rgb_max(162,224,221), rgb_max(36,162,135), rgb_max(96,238,163), 
+rgb_max(49,166,46), rgb_max(188,227,51))
+```
+
+```{r column_list_function,echo=FALSE}
+#function takes table name as argument, and returns list that can be fed into spread_acs
+retrieve_cols<-function(columns,table_name){
+  col_frame<-columns%>%filter(grepl(table_name,name,ignore.case=TRUE))%>%
+    mutate(label=gsub('!','',label),
+           label=gsub('EstimateTotal','',label))
+  col_list<-col_frame$name
+  names(col_list)<-col_frame$label
+  return(col_list)
+  
+}
+```
+
+
+```{r first_row_col_function,echo=FALSE}
+#create a function that takes a matrix as an input, assigns the first row of that matrix
+  #to colnames, deletes first row
+first_row_col_names<-function(matrix){
+  colnames(matrix)<-matrix[1,]
+  matrix<-matrix[2:nrow(matrix),]
+}
+```
+####create functions to pull horizontal data from tidycensus
+
+```{r spread_acs_functions,echo=FALSE}
+#create functions that wrap around get_acs / get_decennial but spreads them out
+spread_acs<-function(variables,state=state_var,year,county=NA,geography,survey="acs5"){
+  if(!is.na(county)){
+    get_acs(variables=variables,state=state,year=year,county=county,geography=geography,survey=survey)%>%
+      select(-moe)%>%
+      spread(key = 'variable', value = 'estimate')
+
+  }else{
+    get_acs(variables=variables,state=state,year=year,geography=geography,survey=survey)%>%
+      select(-moe)%>%
+      spread(key = 'variable', value = 'estimate')
+
+  }
+
+}
+
+spread_dec<-function(variables,state=state_var,year,county=NA,geography){
+  if(!is.na(county)){
+    get_decennial(variables=variables,state=state,year=year,county=county,geography=geography)%>%
+      spread(key = 'variable', value = 'value')
+  }else{
+    get_decennial(variables=variables,state=state_var,year=year,geography=geography)%>%
+      spread(key = 'variable', value = 'value')
+  }
+
+}
+
+
+
+################################# Load variable lists########################
+v17<-load_variables(2017,"acs5", cache=TRUE)
+v10_acs<-load_variables(2010,"acs5",cache=TRUE)
+v10_dec<-load_variables(2010,"sf1",cache=TRUE)
+#################################Demographics#################################
+```
+
+
+####Norwalk Disabled Population
+```{r norwalk_disabilities,echo=FALSE,message=FALSE}
+
+#####################################################################################################
+##########################            DISABILITY STATUS     ###############################
+#####################################################################################################
+disabled_list<-c(
+  "pop2017"="B01003_001",
+  "instiutionalized"="B26101_067",
+  "institutionalized65_74"="B26101_075",
+  "instiutionalized75_84"="B26101_076",
+  "institutionalized85_plus"="B26101_077",
+  "male_65_66"="B01001_020",
+  "male_67_69"="B01001_021",
+  "male_70_74"="B01001_022",
+  "male_75_79"="B01001_023",
+  "male_80_84"="B01001_024",
+  "male_85_plus"="B01001_025",
+  "female_65_66"="B01001_044",
+  "female_67_69"="B01001_045",
+  "female_70_74"="B01001_046",
+  "female_75_79"="B01001_047",
+  "female_80_84"="B01001_048",
+  "female_85_plus"="B01001_049",
+  "disabled_m_under5"="B18101_004",
+  "disabled_m_5_17"="B18101_007",
+  "disabled_m_18_34"="B18101_010",
+  "disabled_m_35_64"="B18101_013",
+  "disabled_m_65_74"="B18101_016",
+  "disabled_m_75_plus"="B18101_019",
+  "disabled_f_under5"="B18101_023",
+  "disabled_f_5_17"="B18101_026",
+  "disabled_f_18_34"="B18101_029",
+  "disabled_f_35_64"="B18101_032",
+  "disabled_f_65_74"="B18101_035",
+  "disabled_f_75_plus"="B18101_038")
+
+county_disabled<-spread_acs(variables=disabled_list,year=2017,geography="place")%>%
+  filter(grepl("Norwalk",NAME))%>%
+  mutate(institutionalized_elderly=institutionalized65_74+instiutionalized75_84+institutionalized85_plus,
+         non_institutionalized_pop=pop2017#-instiutionalized
+         ,
+         disabled17=disabled_m_under5+disabled_m_5_17+disabled_m_18_34+disabled_m_35_64+disabled_m_65_74+
+           disabled_m_75_plus+disabled_f_under5+disabled_f_5_17+disabled_f_18_34+disabled_f_35_64+
+           disabled_f_65_74+disabled_f_75_plus,
+         disabled_elderly17=disabled_m_65_74+disabled_m_75_plus+disabled_f_65_74+disabled_f_75_plus,
+         elderly17= male_65_66+male_67_69+male_70_74+male_75_79+male_80_84+male_85_plus+female_65_66+
+           female_67_69+female_70_74+female_75_79+female_80_84,
+         non_institutionalized_elderly=elderly17#-institutionalized_elderly
+         ,
+         pct_disabled=disabled17/non_institutionalized_pop,
+         pct_elderly_disabled=disabled_elderly17/non_institutionalized_elderly,
+         pct_elderly=non_institutionalized_elderly/non_institutionalized_pop)
+county_disabled%>%select(disabled17,disabled_elderly17,pct_disabled,pct_elderly_disabled)
+### pull cols for each age group to be used for percentages for the disabilities table
+age_cols<-v17%>%filter(grepl("B1810[0-7]_",name,ignore.case=TRUE))%>%
+  mutate(label=gsub('Estimate!!Total','',label))%>%
+  mutate(label=gsub('!','',label))%>%
+  mutate(label=gsub(' ','_',label))%>%
+  mutate(label=gsub('-','_',label))%>%
+  filter(!grepl("disability",label,ignore.case=TRUE))%>%slice(1:15)
+#############find columns associated types of disabilities
+disability_type_cols<-v17%>%filter(grepl("B1810[0-7]_",name,ignore.case=TRUE))%>%
+  mutate(label=gsub('Estimate!!Total','',label))%>%
+  mutate(label=gsub('!','',label))%>%
+  mutate(label=gsub(' ','_',label))%>%
+  mutate(label=gsub('-','_',label))%>%
+  filter(grepl("with",label,ignore.case=TRUE))%>%
+  rbind(age_cols)
+
+###iterate through disability type columns, retrieve values for arlington, bind them
+for(i in 1:nrow(disability_type_cols)){
+  temp_row<-disability_type_cols[i,]
+  temp_list<-c(Population=temp_row$name)
+  names(temp_list)<-temp_row$label
+  if(i==1){
+    disability_type_list<-temp_list
+  }else{
+    disability_type_list<-c(disability_type_list,temp_list)
+  }
+  
+}
+
+disability_types<-spread_acs(variables=disability_type_list,year=2017,geo="place")%>%
+  filter(grepl("Norwalk",NAME))%>%
+  mutate(disabled_18_64=Male18_to_34_yearsWith_a_disability+Male35_to_64_yearsWith_a_disability+
+           Female18_to_34_yearsWith_a_disability+Female35_to_64_yearsWith_a_disability,
+         disabled_65_plus=Male65_to_74_yearsWith_a_disability+Male75_years_and_overWith_a_disability+
+           Female65_to_74_yearsWith_a_disability+Female75_years_and_overWith_a_disability,
+         `   Total w Disability`=MaleUnder_5_yearsWith_a_disability+Male5_to_17_yearsWith_a_disability+
+           FemaleUnder_5_yearsWith_a_disability+Female5_to_17_yearsWith_a_disability+
+           disabled_18_64+disabled_65_plus,
+         hearing_18_64=Male18_to_34_yearsWith_a_hearing_difficulty+Male35_to_64_yearsWith_a_hearing_difficulty+
+           Female35_to_64_yearsWith_a_hearing_difficulty+Female65_to_74_yearsWith_a_hearing_difficulty,
+         hearing_65_plus=Male65_to_74_yearsWith_a_hearing_difficulty+Male75_years_and_overWith_a_hearing_difficulty+
+           Female65_to_74_yearsWith_a_hearing_difficulty+Female75_years_and_overWith_a_hearing_difficulty,
+         `      Hearing Impaired`=hearing_18_64+hearing_65_plus+MaleUnder_5_yearsWith_a_hearing_difficulty+
+           Male5_to_17_yearsWith_a_hearing_difficulty+FemaleUnder_5_yearsWith_a_hearing_difficulty+
+           Female5_to_17_yearsWith_a_hearing_difficulty,
+         vision_18_64=Male18_to_34_yearsWith_a_vision_difficulty+Male35_to_64_yearsWith_a_vision_difficulty+
+           Female35_to_64_yearsWith_a_vision_difficulty+Female65_to_74_yearsWith_a_vision_difficulty,
+         vision_65_plus=Male65_to_74_yearsWith_a_vision_difficulty+Male75_years_and_overWith_a_vision_difficulty+
+           Female65_to_74_yearsWith_a_vision_difficulty+Female75_years_and_overWith_a_vision_difficulty,
+         `      Vision impaired`=vision_18_64+vision_65_plus+MaleUnder_5_yearsWith_a_vision_difficulty+
+           Male5_to_17_yearsWith_a_vision_difficulty+FemaleUnder_5_yearsWith_a_vision_difficulty+
+           Female5_to_17_yearsWith_a_vision_difficulty,
+         cognitive_18_64=Male18_to_34_yearsWith_a_cognitive_difficulty+Male35_to_64_yearsWith_a_cognitive_difficulty+
+           Female35_to_64_yearsWith_a_cognitive_difficulty+Female65_to_74_yearsWith_a_cognitive_difficulty,
+         cognitive_65_plus=Male65_to_74_yearsWith_a_cognitive_difficulty+Male75_years_and_overWith_a_cognitive_difficulty+
+           Female65_to_74_yearsWith_a_cognitive_difficulty+Female75_years_and_overWith_a_cognitive_difficulty,
+         `      Cognitively impaired`=cognitive_18_64+cognitive_65_plus+
+           Male5_to_17_yearsWith_a_cognitive_difficulty+
+           Female5_to_17_yearsWith_a_cognitive_difficulty,
+         ambulatory_18_64=Male18_to_34_yearsWith_an_ambulatory_difficulty+Male35_to_64_yearsWith_an_ambulatory_difficulty+
+           Female35_to_64_yearsWith_an_ambulatory_difficulty+Female65_to_74_yearsWith_an_ambulatory_difficulty,
+         ambulatory_65_plus=Male65_to_74_yearsWith_an_ambulatory_difficulty+Male75_years_and_overWith_an_ambulatory_difficulty+
+           Female65_to_74_yearsWith_an_ambulatory_difficulty+Female75_years_and_overWith_an_ambulatory_difficulty,
+         `      Ambulatory Disability`=ambulatory_18_64+ambulatory_65_plus+
+           Male5_to_17_yearsWith_an_ambulatory_difficulty+
+           Female5_to_17_yearsWith_an_ambulatory_difficulty,
+         self_care_18_64=Male18_to_34_yearsWith_a_self_care_difficulty+Male35_to_64_yearsWith_a_self_care_difficulty+
+           Female35_to_64_yearsWith_a_self_care_difficulty+Female65_to_74_yearsWith_a_self_care_difficulty,
+         self_care_65_plus=Male65_to_74_yearsWith_a_self_care_difficulty+Male75_years_and_overWith_a_self_care_difficulty+
+           Female65_to_74_yearsWith_a_self_care_difficulty+Female75_years_and_overWith_a_self_care_difficulty,
+         `      Self Care Disability`=self_care_18_64+self_care_65_plus+
+           Male5_to_17_yearsWith_a_self_care_difficulty+
+           Female5_to_17_yearsWith_a_self_care_difficulty,
+         independent_living_18_64=Male18_to_34_yearsWith_an_independent_living_difficulty+Male35_to_64_yearsWith_an_independent_living_difficulty+
+           Female35_to_64_yearsWith_an_independent_living_difficulty+Female65_to_74_yearsWith_an_independent_living_difficulty,
+         independent_living_65_plus=Male65_to_74_yearsWith_an_independent_living_difficulty+Male75_years_and_overWith_an_independent_living_difficulty+
+           Female65_to_74_yearsWith_an_independent_living_difficulty+Female75_years_and_overWith_an_independent_living_difficulty,
+         `      Independent Living Disability`=independent_living_18_64+independent_living_65_plus,
+         #population totals for each category
+         pop_18_64=Male18_to_34_years+Male35_to_64_years+Female18_to_34_years+Female35_to_64_years,
+         pop_65_plus=Male65_to_74_years+Male75_years_and_over+Female65_to_74_years+Female75_years_and_over,
+         `Total Population`=pop_18_64+pop_65_plus+MaleUnder_5_years+Male5_to_17_years+
+           FemaleUnder_5_years+Female5_to_17_years)%>%
+  #select only the needed columns
+  select(`Total Population`,`   Total w Disability`,`      Hearing Impaired` ,`      Vision impaired`,`      Cognitively impaired`,`      Ambulatory Disability`,`      Self Care Disability`,`      Independent Living Disability`,
+         pop_18_64,disabled_18_64,hearing_18_64,vision_18_64,cognitive_18_64,ambulatory_18_64,self_care_18_64,independent_living_18_64,
+         pop_65_plus,disabled_65_plus,hearing_65_plus,vision_65_plus,cognitive_65_plus,ambulatory_65_plus,self_care_65_plus,independent_living_65_plus
+  )%>%gather(key="status",value="population")
+
+####make chart pretty
+
+kable(disability_types%>%
+        slice(1:8)%>%
+        mutate(population=comma(population)))
+```
+
+```{r norwalk_commute,echo=FALSE,message=FALSE}
+vehicle_cols<-v17%>%filter(grepl("vehicle",concept,ignore.case=TRUE))
+commute_cols<-v17%>%filter(grepl("B08141",name,ignore.case=TRUE))%>%
+  mutate(label=gsub('!','',label),
+         label=gsub('EstimateTotal','',label))
+commute_col_list<-commute_cols$name
+names(commute_col_list)<-commute_cols$label
+
+norwalk_commute<-spread_acs(commute_col_list,state="CT",geography="place",year=2017)%>%
+  filter(grepl("Norwalk",NAME))%>%
+  select("Car truck or van - carpooled","Car truck or van - drove alone","Public transportation (excluding taxicab)","Taxicab motorcycle bicycle or other means","Walked","Worked at home" )
+
+norwalk_commute%>%
+  gather()%>%
+  mutate(key=gsub(' - ',':\n',key),
+         key=gsub(' \\(','\n \\(',key),
+         key=gsub('transportation','transit',key),
+         key=gsub('b motorcycle ','b, motorcycle\n',key),
+         key=gsub('bicycle or ','bicycle or\n',key))%>%
+  ggplot(aes(x=key,y=value,fill=key))+
+  geom_bar(stat="identity")+
+  labs(title="Norwalk residents - Commute Method",
+       y="Number of workers",
+       x="")+
+  theme_minimal()+
+  scale_y_continuous(labels=comma)+
+  theme(legend.position="none")
+
+```
+
+```{r norwalk_vehicle_household_size,echo=FALSE,message=FALSE}
+available_vehicle_cols<-v17%>%filter(grepl("B08201",name,ignore.case=TRUE))%>%
+  mutate(label=gsub('!','',label),
+         label=gsub('EstimateTotal','',label))
+available_vehicle_col_list<-available_vehicle_cols$name
+names(available_vehicle_col_list)<-available_vehicle_cols$label
+
+vehicles_available<-spread_acs(available_vehicle_col_list,
+                               state="CT",
+                               geography="Place",
+                               year=2017)%>%
+  filter(grepl("Norwalk",NAME))
+
+vehicles_available_2<-cbind(
+  vehicles_available%>%
+    select("1-person household", "2-person household", "3-person household", "4-or-more-person household")%>%
+    gather(),
+  vehicles_available%>%
+    select("1-person householdNo vehicle available", "2-person householdNo vehicle available",
+           "3-person householdNo vehicle available",
+           "4-or-more-person householdNo vehicle available")%>%
+    gather())[,c(1,2,4)]
+
+names(vehicles_available_2)<-c("Household Size","Total Households","No Vehicle")
+
+vehicles_available_2%>%
+  mutate("With Access to Vehicle"=`Total Households`-`No Vehicle`)%>%
+  select(-`Total Households`)%>%
+  gather(key=key,value=value,-"Household Size")%>%
+  ggplot(aes(x=`Household Size`, y=value,fill=key))+
+  geom_bar(position="dodge",stat="identity")+
+  theme_minimal()+
+  labs(x="Household Size",y="Number of Households",title="Norwalk Available Vehicles by\nHousehold Size",
+       fill="")+
+  theme(legend.position="bottom")+
+  scale_y_continuous(label=comma)
+
+
+```
