@@ -30,6 +30,21 @@ library(lwgeom)
 library(rvest)
 ```
 
+```{r test address points}
+#read in address points
+address_points<-read_sf("Norwalk Address Points/NorwalkAddressPoints.shx")%>%
+          st_transform(crs = "+init=epsg:4326")%>%
+  sample_n(1000)
+leaflet(width = "50%")%>%
+  setView(-73.4167485, 41.101619, 11.25) %>%
+  addProviderTiles(provider = "CartoDB.Positron")%>%
+  addCircleMarkers(data=address_points,
+                   radius=3)
+
+unique(address_points$Norwalk_26)
+  
+```
+
 ```{r options, echo=FALSE}
 
 state_var<-"CT"
