@@ -1,0 +1,551 @@
+---
+title: "Norwalk background"
+author: "Devraj Kori"
+date: "9/30/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+knitr::opts_chunk$set(echo = TRUE)
+library(rmarkdown)
+library(knitr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+require(readxl)
+require(openxlsx)
+require(reshape2)
+require(scales)
+require(gridExtra)
+library(tidycensus)
+#for QWI
+library(httr)
+library(jsonlite)
+library(readr)
+library(leaflet)
+library(sf)
+library(sp)
+library(lwgeom)
+library(rvest)
+```
+
+```{r test address points}
+#read in address points
+address_points<-read_sf("Norwalk_Addresses/NorwalkAddressPoints.shx")%>%
+          st_transform(crs = "+init=epsg:4326")%>%
+  sample_n(300)%>%
+  dplyr::select(geometry,Norwalk__3,Norwalk__5,Norwalk__6)%>%
+  #create address in format google maps can read
+  mutate(address=paste0(Norwalk__3,"+",Norwalk__5,",+",Norwalk__6),
+         address=gsub("Norwalk,CT","Norwalk,+CT",address),
+         address=gsub(" ","\\+",address))
+# leaflet(width = "50%")%>%
+#   setView(-73.4167485, 41.101619, 11.25) %>%
+#   addProviderTiles(provider = "CartoDB.Positron")%>%
+#   addCircleMarkers(data=address_points,
+#                    radius=3)
+coordinates<-address_points$geometry
+save(coordinates,file="selected_address_coordinates.Rdata")
+```
+
+```{r options, echo=FALSE}
+
+state_var<-"CT"
+#if only looking at selection of variables for certain categories, change to false
+#enter in the state fips code (for QWI), state FIPS codes can be found here: 
+state_fips<-"09"
+
+v17<-load_variables(2017,"acs5", cache=TRUE)
+```
+
+
+
+```{r maps_api}
+
+
+load("api_key.RData")
+
+destinations<-c("South+Norwalk+Train+Station,+Norwalk,+CT",
+                "Wall+Street+Theatre,+Norwalk,+CT",
+                "East+Norwalk+Train+Station,+Norwalk,+CT",
+                "Mathews+Park,+Norwalk,+CT")
+
+chosen_departure_times<-c(as.POSIXct(strptime("2019-10-16 08:00:00", "%Y-%m-%d %H:%M:%S")),
+                          as.POSIXct(strptime("2019-10-12 11:00:00", "%Y-%m-%d %H:%M:%S")),
+                          as.POSIXct(strptime("2019-10-12 16:00:00", "%Y-%m-%d %H:%M:%S")))
+#create list that transit info will be stored in
+for_row<-c()
+raw_difficulties<-c()
+for_results<-as.data.frame(address_points)
+for_departure_time<-c()
+for(destination in destinations){
+  #create a blank list object to store the data for each destination
+  for_destination<-c()
+  for(departure_time in chosen_departure_times){
+    #create a blank list object where departure data for each time of day will be stored
+      for_departure_time<-c()
+
+      # destination<-"South+Norwalk+Train+Station,+Norwalk,+CT"
+      # chosen_departure_time<-as.POSIXct(strptime("2019-10-09 08:00:00", "%Y-%m-%d %H:%M:%S"))
+    for(i in 1:nrow(address_points)){
+      #store the lat_lon for the address searched
+      lat_lon<-address_points[i,]$geometry[[1]]
+      
+      start_address<-address_points[i,]$address
+      url<-paste0('https://maps.googleapis.com/maps/api/directions/json?origin=',
+                  start_address,'&destination=',
+                  destination,
+                  '&departure_time=',
+                  as.integer(departure_time),
+                  '&mode=transit',
+                  '&key=',
+                  api_key)
+      #call URL
+      # i<-1
+      # start_address<-address_points[1,]$address
+      # destination<-destinations[1]
+      route_info<-GET(url)%>%content
+      #route_info
+      for_departure_time[[i]]<-route_info
+
+      #add for departure time to the destination list object
+      for_destination[[paste0(departure_time)]]<-for_departure_time
+  }
+    #add for destination to transit_difficulties
+    raw_difficulties[[paste0(destination)]]<-for_destination
+  }
+}
+#lon<-73.4348276
+#lat<-41.1519014
+#save the transit difficulties
+save(raw_difficulties,
+     file="unparsed_difficulties2.RData")
+
+
+```
+
+
+```{r parse_raw_difficulties}
+
+#count total number of status not okays
+# okays<-c()
+# not_okays<-c()
+# for(destination in raw_difficulties){
+#   for(departure_time in destination){
+#     for(x in departure_time){
+#       if(x$status=="OK"){
+#         okays<-c(okays,i)
+#       }
+# 
+#       }
+#     }
+# }
+rm(list=ls())
+
+load("unparsed_difficulties2.RData")
+load("selected_address_coordinates.Rdata")
+
+destinations<-c("South+Norwalk+Train+Station,+Norwalk,+CT",
+                "Wall+Street+Theatre,+Norwalk,+CT",
+                "East+Norwalk+Train+Station,+Norwalk,+CT",
+                "Mathews+Park,+Norwalk,+CT")
+
+chosen_departure_times<-c(as.POSIXct(strptime("2019-10-16 08:00:00", "%Y-%m-%d %H:%M:%S")),
+                          as.POSIXct(strptime("2019-10-12 11:00:00", "%Y-%m-%d %H:%M:%S")),
+                          as.POSIXct(strptime("2019-10-12 16:00:00", "%Y-%m-%d %H:%M:%S")))
+transit_difficulties<-c()
+# x<-raw_difficulties[[1]][[1]][[1]]
+# y<-raw_difficulties[[1]][[1]]
+# i<-1
+# 
+# for(i in 1:length(y)){
+#   temp<-y[[i]]
+#   if(temp$status=="OK"){
+#       addr<-temp[["routes"]][[1]][["legs"]][[1]]$start_address
+#   if(grepl("135 flax",addr,ignore.case=TRUE)){
+#     print(i)
+#   }
+# 
+#   }
+# 
+#   }
+# 
+# test_avail_depart<-y[[181]][["routes"]][[1]][["legs"]][[1]][["departure_time"]]$value
+# 
+# test_avail_depart2<-available_departure_time<-as.POSIXct.numeric(
+#         test_avail_depart,
+#         origin = "1970-01-01"
+#         )
+# depart_wed<-chosen_departure_times[[1]]
+# destination<-destinations[[1]]
+# destination_info<-raw_difficulties[[destination]]
+# depart_time_info<-destination_info[[paste0(as.numeric(depart_time))]]
+# x<-depart_time_info[[181]]
+
+for(destination in destinations){
+  #index raw_difficulties to given destination
+  destination_info<-raw_difficulties[[destination]]
+  
+  #create blank object to store results
+  for_destination<-c()
+  for(k in 1:length(chosen_departure_times)){
+    depart_time<-chosen_departure_times[[k]]
+    #index destination_fino for chosen departure time
+    depart_time_info<-destination_info[[paste0(as.numeric(depart_time))]]
+    #create blank object to store results
+    for_departure_time<-c()
+    #create blank data frames to store available and unavailable in
+    unavailable<-data.frame(start_address="",geometry=coordinates[1],reason="",soonest_departure="")[0,]
+    available<-data.frame(start_address="",geometry=coordinates[1],
+                          `Total Transit Time`=0,
+                          `Number of Transfers`=0,
+                          `Total Distance to/from transit stops`=0,
+                          `Transit Lines`="",
+                          `Instructions`="",
+                          check.names=FALSE,
+                          stringsAsFactors=FALSE)[0,]
+    for(i in 1:length(depart_time_info)){
+      x<-depart_time_info[[i]]
+      #check if status is okay, and if its not, attach to unavailable with reason "no available route"
+      if(x$status!="OK"){
+        temp_unavailable<-data.frame(start_address="",
+                                     geometry=coordinates[i],
+                                     reason="No Route Found",
+                                     soonest_departure="NA")
+        unavailable<-rbind(unavailable,temp_unavailable)
+      }else{
+        #extract info from r needed from all rows
+      start_address<-x[["routes"]][[1]][["legs"]][[1]]$start_address
+      # lat<-x[["routes"]][[1]][["legs"]][[1]]$start_location[["lat"]]
+      # lon<-x[["routes"]][[1]][["legs"]][[1]]$start_location[["lng"]]
+      # lat=coordinates[[i]][[2]]
+      # lon=coordinates[[i]][[1]]
+      # geometry<-coordinates[[i]]
+      #parse x
+      #retrieve departure time for first leg from google
+      available_departure_time<-as.POSIXct.numeric(
+        x$routes[[1]]$legs[[1]]$departure_time$value,
+        origin = "1970-01-01"
+        )
+      #this is an ugly solution, but make the available departure time equal to the departure time if Google maps just says to walk (no transit needed)
+      if(length(available_departure_time)==0){
+        available_departure_time<-depart_time
+      }
+      #test if available departure time is too far out from departure time
+      if(available_departure_time-depart_time>90){
+        #store results in temp unavailable, append to unavailable
+        temp_unavailable2<-data.frame(start_address=start_address,
+                                     geometry<-coordinates[i],
+                                     reason="Wait time > 90 min",
+                                     soonest_departure=paste0(available_departure_time))
+        unavailable<-rbind(unavailable,temp_unavailable2)
+      }else{
+        #we've confirmed that there is an available route within 1:30 of chosen departure time
+        #now we can extract info
+        #find the length of steps
+        steps<-x$routes[[1]]$legs[[1]]$steps
+        walking_steps<-c()
+        transit_steps<-c()
+        instructions<-c()
+        for(j in 1:length(steps)){
+          step<-steps[[j]]
+          #store the html instruction as object that will go in an html list
+          instruction<-paste0("<li>",step$html_instructions,"</li>")
+          #append to other instructions
+          instructions<-paste0(instructions,instruction)
+          if(step$travel_mode=="WALKING"){
+            #if the step is a walking step, add the distance to walking steps
+            walking_steps<-c(walking_steps,step$distance$value)
+            }else if(step$travel_mode=="TRANSIT"){
+              #if the step is a transit step, add the name of the line to transit steps
+              transit_steps<-c(transit_steps,step$transit_details$line$name)
+            }
+          
+        }
+        
+        #store total time of trip
+        total_transit_time<-x$routes[[1]]$legs[[1]]$duration$value/60
+        #store total walking distance for trip
+        walking_distance<-sum(walking_steps)
+        transfers<-max(length(transit_steps)-1,0)
+        transit_lines<-paste(transit_steps,collapse=", ")
+        if(length(transit_steps)==0){transit_lines<-c("Walking Only")}
+        #check if the walking distance is greater than a mile, and if it is, put it in unavailable
+        if(walking_distance>2414.02){
+          temp_unavailable3<-data.frame(start_address=start_address,
+                                        geometry<-coordinates[i],
+                                       reason="Walk > 1.5 mile",
+                                       soonest_departure="NA")
+          unavailable<-rbind(unavailable,temp_unavailable3)
+        }else{
+          #now we know that there's a reasonable/available route
+          temp_available<-data.frame(start_address=start_address,
+                                     gemoetry<-coordinates[i],
+                                     `Total Transit Time`=total_transit_time,
+                                     `Number of Transfers`=transfers,
+                                     `Total Distance to/from transit stops`=walking_distance,
+                                     `Transit Lines`=transit_lines,
+                                     Instructions<-instructions,
+                                     check.names=FALSE,
+                                     stringsAsFactors=FALSE
+                                     )
+          #add results for given x to available
+          available<-rbind(available,temp_available)
+        }
+      }
+      
+      }#end x loop
+
+    } #store these results in the list object
+      for_departure_time[["available"]]<-available
+      for_departure_time[["unavailable"]]<-unavailable
+      #add for departure time to the destination list object
+      for_destination[[paste0(as.numeric(depart_time))]]<-for_departure_time
+    
+  }
+  transit_difficulties[[paste0(destination)]]<-for_destination
+}
+
+save(transit_difficulties,file="Norwalk_Transit_Map/transit_difficulties6.RData")
+```
+
+```{r test_leaflet}
+test_data<-transit_difficulties[[1]][[1]][[1]]%>%st_as_sf()
+leaflet(width = "50%")%>%
+      setView(-73.4167485, 41.101619, 11.25) %>%
+      addProviderTiles(provider = "CartoDB.Positron")%>%
+      addCircleMarkers(data=test_data,#popup =~pop_up,
+                       #layerId = ~`Transit Lines`,
+                       stroke=FALSE,
+                       radius=10,
+                       fillOpacity=0.8,
+                       #color=~pal()(`Total Transit Time`),
+                       group="avail")
+                       
+```
+
+```{r test_rewrite_parse}
+rm(list=ls())
+load("unparsed_difficulties.RData")
+
+destinations<-c("South+Norwalk+Train+Station,+Norwalk,+CT",
+                "Wall+Street+Theatre,+Norwalk,+CT",
+                "East+Norwalk+Train+Station,+Norwalk,+CT",
+                "Mathews+Park,+Norwalk,+CT")
+
+chosen_departure_times<-c(as.POSIXct(strptime("2019-10-16 08:00:00", "%Y-%m-%d %H:%M:%S")),
+                          as.POSIXct(strptime("2019-10-12 11:00:00", "%Y-%m-%d %H:%M:%S")),
+                          as.POSIXct(strptime("2019-10-12 16:00:00", "%Y-%m-%d %H:%M:%S")))
+
+transit_difficulties<-c()
+# x<-raw_difficulties[[1]][[1]][[1]]
+# y<-raw_difficulties[[1]][[1]]
+# i<-1
+# 
+# for(i in 1:length(y)){
+#   temp<-y[[i]]
+#   if(temp$status=="OK"){
+#       addr<-temp[["routes"]][[1]][["legs"]][[1]]$start_address
+#   if(grepl("135 flax",addr,ignore.case=TRUE)){
+#     print(i)
+#   }
+# 
+#   }
+# 
+#   }
+# 
+# test_avail_depart<-y[[181]][["routes"]][[1]][["legs"]][[1]][["departure_time"]]$value
+# 
+# test_avail_depart2<-available_departure_time<-as.POSIXct.numeric(
+#         test_avail_depart,
+#         origin = "1970-01-01"
+#         )
+# depart_wed<-chosen_departure_times[[1]]
+# destination<-destinations[[1]]
+# destination_info<-raw_difficulties[[destination]]
+# depart_time_info<-destination_info[[paste0(as.numeric(depart_time))]]
+# x<-depart_time_info[[181]]
+# destination<-destinations[[1]]
+# depart_time<-chosen_departure_times[[1]]
+# x<-depart_time_info[[181]]
+for(destination in destinations){
+  #index raw_difficulties to given destination
+  destination_info<-raw_difficulties[[destination]]
+  
+  #create blank object to store results
+  for_destination<-c()
+  for(k in 1:length(chosen_departure_times)){
+    depart_time<-chosen_departure_times[[k]]
+    #index destination_fino for chosen departure time
+    depart_time_info<-destination_info[[paste0(as.numeric(depart_time))]]
+    #create blank object to store results
+    for_departure_time<-c()
+    #create blank data frames to store available and unavailable in
+    unavailable<-data.frame(start_address="",lat=1,lon=1,reason="",soonest_departure="")[0,]
+    available<-data.frame(start_address="",lat=1,lon=1,
+                          `Total Transit Time`=0,
+                          `Departure Time`="",
+                          `Wait til Departure`=0,
+                          `Number of Transfers`=0,
+                          `Total Distance to/from transit stops`=0,
+                          `Transit Lines`="",
+                          check.names=FALSE)[0,]
+    for(x in depart_time_info){
+      #check if status is okay, and if its not, attach to unavailable with reason "no available route"
+      if(x$status!="OK"){
+        temp_unavailable<-data.frame(start_address=start_address,
+                                     lat=lat,lon=lon,
+                                     reason="No Route Found",
+                                     soonest_departure="NA")
+        unavailable<-rbind(unavailable,temp_unavailable)
+      }else{
+        #extract info from r needed from all rows
+      start_address<-x[["routes"]][[1]][["legs"]][[1]]$start_address
+      lat<-x[["routes"]][[1]][["legs"]][[1]]$start_location[["lat"]]
+      lon<-x[["routes"]][[1]][["legs"]][[1]]$start_location[["lng"]]
+      #parse x
+      #retrieve departure time for first leg from google
+      available_departure_time<-as.POSIXct.numeric(
+        x$routes[[1]]$legs[[1]]$departure_time$value,
+        origin = "1970-01-01"
+        )
+      #this is an ugly solution, but make the available departure time equal to the departure time if Google maps just says to walk (no transit needed)
+      if(length(available_departure_time)==0){
+        available_departure_time<-depart_time
+      }
+      wait_time<-available_departure_time-depart_time
+      #now we can extract info
+      #find the length of steps
+      steps<-x$routes[[1]]$legs[[1]]$steps
+      walking_steps<-c()
+      transit_steps<-c()
+      for(j in 1:length(steps)){
+          step<-steps[[j]]
+          if(step$travel_mode=="WALKING"){
+            #if the step is a walking step, add the distance to walking steps
+            walking_steps<-c(walking_steps,step$distance$value)
+            }else if(step$travel_mode=="TRANSIT"){
+              #if the step is a transit step, add the name of the line to transit steps
+              transit_steps<-c(transit_steps,step$transit_details$line$name)
+            }
+          
+        }
+        #store total time of trip
+        total_transit_time<-x$routes[[1]]$legs[[1]]$duration$value/60
+        #store total walking distance for trip
+        walking_distance<-sum(walking_steps)
+        transfers<-max(length(transit_steps)-1,0)
+        transit_lines<-paste(transit_steps,collapse=", ")
+        #check if the walking distance is greater than a mile, and if it is, put it in unavailable
+        if(walking_distance>1609.34){
+          temp_unavailable3<-data.frame(start_address=start_address,
+                                       lat=lat,
+                                       lon=lon,
+                                       reason="Walk > 1 mile",
+                                       soonest_departure="NA")
+          unavailable<-rbind(unavailable,temp_unavailable3)
+        }else{
+          #now we know that there's a reasonable/available route
+          temp_available<-data.frame(start_address=start_address,
+                                     lat=lat,
+                                     lon=lon,
+                                     `Total Transit Time`=total_transit_time,
+                                     `Departure Time`=available_departure_time,
+                                     `Wait til Departure`=wait_time,
+                                     `Number of Transfers`=transfers,
+                                     `Total Distance to/from transit stops`=walking_distance,
+                                     `Transit Lines`=transit_lines,
+                                     check.names=FALSE
+                                     )
+          #add results for given x to available
+          available<-rbind(available,temp_available)
+        }
+      }
+      
+      #end x loop
+
+    } #store these results in the list object
+      for_departure_time[["available"]]<-available
+      for_departure_time[["unavailable"]]<-unavailable
+      #add for departure time to the destination list object
+      for_destination[[paste0(depart_time)]]<-for_departure_time
+    
+  }
+  transit_difficulties[[paste0(destination)]]<-for_destination
+}
+
+save(transit_difficulties,file="Norwalk_Transit_Map/transit_difficulties3.RData")
+
+
+
+```
+
+
+
+
+
+```{r test_map}
+load("Norwalk_Proto3/transit_difficulties.rData")
+available<-transit_difficulties[[1]][[1]][["available"]]%>%
+  #dplyr::rename("chosen_stat"="Total Transit Time")%>%
+  select(-geometry)%>%
+      #add a column for the data in the popup
+      mutate(pop_up=paste(sep="<br/>",
+                          paste0("<b>Total Transit Time:</b> ",`Total Transit Time`),
+                          paste0("<b>Number of Transfers: </b>",`Number of Transfers`),
+                          paste0("<b>Total Distance to/from transit stops: </b>", `Total Distance to/from transit stops`),
+                          paste0("<b>Transit Lines Used: </b>", `Transit Lines`)))
+pal<-colorNumeric(palette = "RdYlGn", 
+                   domain = available$chosen_stat, n = nrow(available),
+                  reverse=TRUE)
+  icons <- awesomeIconList(
+    times_circle = makeAwesomeIcon(icon = "times-circle", library = "fa", markerColor = "red")
+  )
+pal<-colorNumeric(palette = "RdYlGn", 
+                        domain = available$`Total Transit Time`, #n = nrow(available()),
+                        reverse=TRUE)
+leaflet(width = "50%")%>%
+      setView(-73.4167485, 41.101619, 11.25) %>%
+      addProviderTiles(provider = "CartoDB.Positron")%>%
+      addCircleMarkers(data=available,popup=~pop_up,
+                       color=~pal(`Total Transit Time`),
+                       group="unavail")
+```
+scraping each google maps link
+```{r scraping_google_maps}
+#aquarium[1,]$url
+api_key=""
+lat<-41.06234
+lon<--73.43258
+#construct api url
+depart_time<-as.POSIXct.numeric(1570624902,origin = "1970-01-01")
+test_date<-as.POSIXct(strptime("2019-10-12 11:00:00", "%Y-%m-%d %H:%M:%S"))
+as.integer(test_date)
+
+as.Date(test_date,"%m/%d/%Y")==as.Date(depart_time,origin = "1970-01-01","%m/%d/%Y")
+check<-depart_time-test_date
+
+url<-paste0('https://maps.googleapis.com/maps/api/directions/json?origin=',
+            lat,",",lon,'&destination=',
+            "South+Norwalk+Train+Station,+Norwalk,+CT",
+            '&departure_time=',
+            as.integer(test_date),
+            '&mode=transit',
+            '&key=',
+            api_key)
+
+test_call<-GET(url=url)
+# test_call%>%content
+test_call2<-test_call%>%content
+test_call2$status
+# steps<-test_call2$routes[[1]]$legs[[1]]$steps
+# 
+# for(i in 1:length(steps)){
+#  print(
+#    paste(steps[[i]]$travel_mode,
+#          steps[[i]]$distance$text,
+#          steps[[i]]$duration$text,
+#          sep=", "))
+# }
+```

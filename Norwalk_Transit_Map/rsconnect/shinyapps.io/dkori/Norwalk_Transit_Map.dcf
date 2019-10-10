@@ -1,0 +1,13 @@
+name: Norwalk_Transit_Map
+title: Norwalk_Transit_Map
+username:
+account: dkori
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 1311043
+bundleId: 2487909
+url: https://dkori.shinyapps.io/Norwalk_Transit_Map/
+when: 1570720858.15846
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: transit_difficulties.RData|transit_difficulties2.RData|transit_difficulties3.RData|transit_difficulties4.RData
