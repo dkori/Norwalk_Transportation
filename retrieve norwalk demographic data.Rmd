@@ -1,0 +1,78 @@
+---
+title: "Norwalk background"
+author: "Devraj Kori"
+date: "9/30/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+knitr::opts_chunk$set(echo = TRUE)
+library(rmarkdown)
+library(knitr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+require(readxl)
+require(openxlsx)
+require(reshape2)
+require(scales)
+require(gridExtra)
+library(tidycensus)
+#for QWI
+library(httr)
+library(jsonlite)
+library(readr)
+library(leaflet)
+library(sf)
+library(sp)
+library(lwgeom)
+library(rvest)
+```
+
+
+
+```{r options, echo=FALSE}
+
+state_var<-"CT"
+#if only looking at selection of variables for certain categories, change to false
+#enter in the state fips code (for QWI), state FIPS codes can be found here: 
+state_fips<-"09"
+
+v17<-load_variables(2017,"acs5", cache=TRUE)
+```
+
+```{r identify_norwalk_tracts}
+test<-v17%>%filter(grepl("race",concept,ignore.case=TRUE))
+#read in norwalk census tracts
+options(scipen=999)
+norwalk_tracts<-read_csv("Norwalk CTs.csv")%>%
+  mutate(GEOID=paste0('0',GEOID))
+check<-v17%>%filter(grepl("^age",concept,ignore.case=TRUE))
+check2<-v17%>%filter(grepl("B18101",name,ignore.case=TRUE))
+#create list of vars to pull for Norwalk
+demo_stats<-c(Population="B01003_001", 
+              White="B02001_002",
+              Poverty="B17001_002",
+              Median_hh_income="B06011_001",
+              Pop_age="C18130_001", #total pop for this table is slightly off from general total
+              `Under 18`="C18108_002",
+              `Over 65`="C18108_010")
+#pull demo_stats for norwalk at the ct level
+norwalk_stats<-get_acs(variables=demo_stats,
+                       state="CT",
+                       geography="tract",
+                       year=2017,
+                       geometry=TRUE)%>%
+  select(-moe)%>%
+  filter(GEOID%in%norwalk_tracts$GEOID)%>%
+  spread(key=variable,value=estimate)%>%
+  mutate(`Poverty Rate`=Poverty/Population,
+         `Pct Non-White`=(Population-White)/Population,
+         `Pct Under 18 y.o.`=`Under 18`/Pop_age,
+         `Pct Over 65 y.o.` =`Over 65`/Pop_age)
+
+save(norwalk_stats,file="Norwalk_Proto3/norwalk_stats.rData")
+
+
+```
